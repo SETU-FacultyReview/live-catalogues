@@ -101,8 +101,10 @@ class TutorsCatalogue:
         self._clean_output()
 
         # Create LLM web object if URL provided (after cleaning to avoid deletion)
-        if self.llm_notebook_url:
-            self._create_llm_web_object()
+        # Temporarily disabled: LLM card removed from all courses for the moment.
+        # Re-enable by uncommenting the two lines below.
+        # if self.llm_notebook_url:
+        #     self._create_llm_web_object()
 
         # Generate units for each department
         for unit_num, dept_config in enumerate(self.departments, 1):
@@ -180,6 +182,9 @@ class TutorsCatalogue:
 
         # Generate all modules
         dept_gen.generate_all_modules(unit_dir, module_to_cluster_path)
+
+        # Generate modules grouped by author
+        dept_gen.generate_by_author(unit_dir, module_to_cluster_path)
 
     def _create_course_files(self):
         """Create required course files (course.md, properties.yaml, course.png)"""

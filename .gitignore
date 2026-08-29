@@ -1,3 +1,8 @@
 tutors-science-faculty
 tutors-science-dept
 tutors-computing-maths-dept
+
+# Python
+__pycache__/
+*.py[cod]
+.env

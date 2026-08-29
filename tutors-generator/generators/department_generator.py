@@ -250,6 +250,106 @@ class DepartmentGenerator:
 
         print(f"    Generated {len(self.department.modules)} module web links")
 
+    def generate_by_author(self, output_dir: Path, module_to_cluster_path: dict):
+        """
+        Generate a "by author" topic, grouping modules by their author field.
+
+        Each author becomes a sub-topic containing web link objects that point
+        to the same cluster notes used by the all-modules topic. Modules with no
+        author are grouped under an "Unknown Author" sub-topic.
+
+        Args:
+            output_dir: Directory where the by-author topic should be created
+            module_to_cluster_path: Mapping of module codes to weburl paths
+        """
+        from collections import defaultdict
+
+        by_author_dir = output_dir / "topic-04-by-author"
+        by_author_dir.mkdir(exist_ok=True)
+
+        # Create by-author topic.md
+        by_author_icon = self.catalogue_icons.get('by-author', {})
+        icon_type = by_author_icon.get('type', 'mdi:account-multiple')
+        icon_color = by_author_icon.get('color', 'C2185B')
+
+        # Group modules by author
+        authors = defaultdict(list)
+        for module_code, descriptor in self.department.modules.items():
+            author = descriptor.get('author') or 'Unknown Author'
+            authors[author].append((module_code, descriptor))
+
+        with open(by_author_dir / "topic.md", 'w') as f:
+            f.write(create_icon_frontmatter(icon_type, icon_color))
+            f.write("# By Author\n\n")
+            f.write(f"{len(authors)} authors\n")
+
+        module_link_count = 0
+
+        # Sort authors alphabetically (Unknown Author sorts naturally)
+        sorted_authors = sorted(authors.keys())
+
+        for author_idx, author in enumerate(sorted_authors, 1):
+            author_dir_name = sanitize_filename(author)
+            author_dir = by_author_dir / f"topic-{author_idx:02d}-{author_dir_name}"
+            author_dir.mkdir(exist_ok=True)
+
+            # Create author topic.md
+            author_modules = authors[author]
+            with open(author_dir / "topic.md", 'w') as f:
+                f.write(create_icon_frontmatter('mdi:account', icon_color))
+                f.write(f"# {author}\n\n")
+                f.write(f"{len(author_modules)} modules\n")
+
+            # Sort this author's modules alphabetically by full title
+            sorted_modules = sorted(
+                author_modules,
+                key=lambda x: x[1].get('full_title', x[0])
+            )
+
+            for idx, (module_code, descriptor) in enumerate(sorted_modules, 1):
+                short_title = descriptor.get('short_title', descriptor.get('full_title', module_code))
+                full_title = descriptor.get('full_title', module_code)
+                module_name = sanitize_filename(full_title)
+
+                # Create web object directory
+                web_dir = author_dir / f"web-{idx:03d}-web-{idx:03d}-{module_name}"
+                web_dir.mkdir(exist_ok=True)
+
+                # Get cluster for icon
+                cluster_name = descriptor.get('cluster', 'Uncategorized')
+
+                # Get icon
+                mod_icon_type, mod_icon_color = get_icon_for_item(
+                    module_code,
+                    self.module_icons,
+                    cluster_name=cluster_name,
+                    cluster_icons=self.cluster_icons
+                )
+
+                # Extract first sentence of aim
+                aim_text = descriptor.get('aim', '')
+                if aim_text:
+                    first_sentence = convert_latex_to_markdown(extract_first_sentence(aim_text))
+                else:
+                    first_sentence = ''
+
+                # Create link.md (same format as all-modules)
+                with open(web_dir / "link.md", 'w') as f:
+                    f.write(create_icon_frontmatter(mod_icon_type, mod_icon_color))
+                    f.write(short_title)
+                    if first_sentence:
+                        f.write("\n\n")
+                        f.write(first_sentence)
+
+                # Create weburl pointing to the same cluster note as all-modules
+                cluster_path = module_to_cluster_path.get(module_code, "#")
+                with open(web_dir / "weburl", 'w') as f:
+                    f.write(cluster_path)
+
+                module_link_count += 1
+
+        print(f"    Generated {len(authors)} authors with {module_link_count} module web links")
+
     def generate_programmes(self, output_dir: Path, module_to_cluster_path: dict) -> dict:
         """
         Generate programmes organized by level (6, 7, 8, 9, 10).
