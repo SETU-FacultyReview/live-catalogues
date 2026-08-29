@@ -1,0 +1,274 @@
+"""
+TutorsCatalogue - Orchestrates generation of the complete Tutors course.
+
+This class creates a Catalogue, creates Department objects, and uses
+DepartmentGenerator to produce a complete Tutors course matching the
+current tutors-modules-by-dept structure.
+"""
+
+import os
+import sys
+import shutil
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from models import Catalogue, Department
+from generators import DepartmentGenerator
+from icons import create_icon_frontmatter
+
+
+# Load environment variables
+load_dotenv()
+
+
+class TutorsCatalogue:
+    """
+    Orchestrates the generation of a complete Tutors course.
+
+    This class coordinates the creation of all components needed to generate
+    a Tutors course from the SETU Science Faculty Module Catalogue.
+    """
+
+    def __init__(
+        self,
+        catalogue: Catalogue,
+        departments: list,
+        data_dir: Path,
+        tutors_generator_dir: Path,
+        output_dir: Path = None,
+        tutors_course_id: str = None,
+        course_title: str = None,
+        course_description: str = None,
+        llm_notebook_url: str = None
+    ):
+        """
+        Initialize the course generator.
+
+        Args:
+            catalogue: The loaded Catalogue object
+            departments: List of department dictionaries, each containing:
+                - 'department': Department object
+                - 'icon_type': Icon type for the unit (e.g., 'mdi:laptop')
+                - 'icon_color': Icon color for the unit (e.g., '1976D2')
+            data_dir: Path to data directory (repo root with Descriptors/, data/, etc.)
+            tutors_generator_dir: Path to tutors-generator directory (for tutors-files/)
+            output_dir: Path to output directory (defaults to data_dir/tutors-modules-by-dept)
+            tutors_course_id: Tutors course ID (defaults to environment variable or 'setu-science-modules')
+            course_title: Course title (defaults to 'SETU Science Modules by Department')
+            course_description: Course description (defaults to generic description)
+            llm_notebook_url: URL to NotebookLM for this course (optional)
+        """
+        self.catalogue = catalogue
+        self.departments = departments
+        self.data_dir = Path(data_dir)
+        self.tutors_generator_dir = Path(tutors_generator_dir)
+
+        # Set output directory
+        if output_dir is None:
+            output_dir = self.data_dir / "tutors-modules-by-dept"
+        self.output_dir = Path(output_dir)
+
+        # Set Tutors course ID (parameter > environment > default)
+        if tutors_course_id is None:
+            tutors_course_id = os.getenv('TUTORS_COURSE_ID', 'setu-science-modules')
+        self.tutors_course_id = tutors_course_id
+
+        # Set course title and description
+        if course_title is None:
+            course_title = "SETU Science Modules by Department"
+        self.course_title = course_title
+
+        if course_description is None:
+            course_description = "This site contains a complete catalogue of approved modules organized by department."
+        self.course_description = course_description
+
+        # Set NotebookLM URL
+        self.llm_notebook_url = llm_notebook_url
+
+    def generate_tutors_course(self):
+        """
+        Generate the complete Tutors course.
+
+        This creates a course structure with units for each department in the departments list.
+        """
+        # Create course files
+        self._create_course_files()
+
+        # Clean output directory (except course files we just created)
+        self._clean_output()
+
+        # Create LLM web object if URL provided (after cleaning to avoid deletion)
+        if self.llm_notebook_url:
+            self._create_llm_web_object()
+
+        # Generate units for each department
+        for unit_num, dept_config in enumerate(self.departments, 1):
+            self._generate_department_unit(
+                unit_num=unit_num,
+                department=dept_config['department'],
+                icon_type=dept_config['icon_type'],
+                icon_color=dept_config['icon_color']
+            )
+
+        # Print completion message
+        print()
+        print("=" * 60)
+        print("Generation complete!")
+        print("=" * 60)
+        print(f"\nOutput directory: {self.output_dir}")
+        for unit_num, dept_config in enumerate(self.departments, 1):
+            print(f"- Unit {unit_num}: {dept_config['department'].name}")
+
+    def _generate_department_unit(
+        self,
+        unit_num: int,
+        department: Department,
+        icon_type: str,
+        icon_color: str
+    ):
+        """
+        Generate a complete department unit.
+
+        Args:
+            unit_num: Unit number (1 for Computing, 2 for Science)
+            department: Department object
+            icon_type: Icon type for unit
+            icon_color: Icon color for unit
+        """
+        print(f"\nGenerating Unit {unit_num}: {department.name}...")
+
+        # Create unit directory
+        unit_dir = self.output_dir / f"unit-{unit_num}"
+        unit_dir.mkdir(exist_ok=True)
+
+        # Create unit topic.md
+        with open(unit_dir / "topic.md", 'w') as f:
+            f.write(create_icon_frontmatter(icon_type, icon_color))
+            f.write(f"# {department.name}\n\n")
+            f.write("Browse programmes, clusters, and modules.\n")
+
+        print(f"  {department.get_summary()}")
+
+        # Create department generator
+        dept_gen = DepartmentGenerator(
+            department=department,
+            source_dir=self.data_dir,
+            module_icons=self.catalogue.module_icons,
+            cluster_icons=self.catalogue.cluster_icons,
+            programme_icons=self.catalogue.programme_icons,
+            catalogue_icons=self.catalogue.catalogue_icons,
+            tutors_course_id=self.tutors_course_id
+        )
+
+        # Generate programmes first to build programme path mapping
+        # (we need module_to_cluster_path for programme generation, so generate a temp one)
+        # Actually, we need to generate clusters first for module_to_cluster_path
+        # Then programmes to get programme_to_topic_path
+        # Then regenerate clusters with programme links
+
+        # First pass: generate clusters to get module paths
+        module_to_cluster_path, _ = dept_gen.generate_clusters(unit_dir)
+
+        # Generate programmes to get programme topic paths
+        programme_to_topic_path = dept_gen.generate_programmes(unit_dir, module_to_cluster_path)
+
+        # Second pass: regenerate clusters with programme and cluster links
+        module_to_cluster_path, cluster_to_topic_path = dept_gen.generate_clusters(unit_dir, programme_to_topic_path)
+
+        # Generate all modules
+        dept_gen.generate_all_modules(unit_dir, module_to_cluster_path)
+
+    def _create_course_files(self):
+        """Create required course files (course.md, properties.yaml, course.png)"""
+        print("Setting up course files...")
+
+        # Create output directory if it doesn't exist
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get tutors-files directory
+        tutors_files_dir = self.tutors_generator_dir / "tutors-files"
+
+        # Create course.md with custom title and description
+        dest_course_md = self.output_dir / "course.md"
+        with open(dest_course_md, 'w') as f:
+            f.write(f"# {self.course_title}\n\n")
+            f.write(f"{self.course_description}\n\n")
+
+            # Add department unit information
+            for unit_num, dept_config in enumerate(self.departments, 1):
+                dept_name = dept_config['department'].name
+                f.write(f"**Unit {unit_num}:** {dept_name}\n\n")
+
+        print("  Created course.md")
+
+        # Create root topic.md
+        root_topic = self.output_dir / "topic.md"
+        with open(root_topic, 'w') as f:
+            f.write(f"# {self.course_title}\n\n")
+            f.write("Browse modules organized by department.\n")
+        print("  Created topic.md")
+
+        # Copy properties.yaml
+        source_props = tutors_files_dir / "properties.yaml"
+        dest_props = self.output_dir / "properties.yaml"
+        if source_props.exists():
+            shutil.copy(source_props, dest_props)
+            print("  Copied properties.yaml")
+        else:
+            # Fallback: create basic properties.yaml
+            with open(dest_props, 'w') as f:
+                f.write("credits: SETU Faculty\n")
+                f.write("parent: #\n")
+            print("  Created properties.yaml (source not found)")
+
+        # Copy course.png
+        source_png = tutors_files_dir / "course.png"
+        dest_png = self.output_dir / "course.png"
+        if source_png.exists():
+            shutil.copy(source_png, dest_png)
+            print("  Copied course.png")
+        else:
+            print("  Warning: course.png not found in tutors-files directory")
+
+        print()
+
+    def _create_llm_web_object(self):
+        """Create LLM web object linking to NotebookLM in unit-1"""
+        # Create web-llm directory in unit-1
+        unit1_dir = self.output_dir / "unit-1"
+        llm_dir = unit1_dir / "web-llm"
+        llm_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create link.md with icon frontmatter
+        link_md = llm_dir / "link.md"
+        with open(link_md, 'w') as f:
+            # Add icon frontmatter
+            f.write("---\n")
+            f.write("icon:\n")
+            f.write("  type: mdi:robot\n")
+            f.write("  color: EA4335\n")
+            f.write("---\n")
+            f.write("# LLM\n\n")
+            f.write("Ask questions about this course using NotebookLM - an AI-powered research assistant.\n")
+
+        # Create weburl file with the NotebookLM URL
+        weburl_file = llm_dir / "weburl"
+        with open(weburl_file, 'w') as f:
+            f.write(self.llm_notebook_url)
+
+        print("  Created LLM web object")
+
+    def _clean_output(self):
+        """Clean the output directory (preserving course files that were just created)"""
+        if self.output_dir.exists():
+            keep_files = ['properties.yaml', 'course.md', 'course.png', 'topic.md']
+
+            for item in self.output_dir.iterdir():
+                if item.name not in keep_files:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
