@@ -350,6 +350,166 @@ class DepartmentGenerator:
 
         print(f"    Generated {len(authors)} authors with {module_link_count} module web links")
 
+    def generate_programme_network(self, output_dir: Path, programme_to_topic_path: dict = None):
+        """
+        Generate a department-level "Programme Network" note with a Mermaid diagram.
+
+        The diagram is a programme-to-programme similarity graph: each node is a
+        programme in the department, and an edge between two programmes is drawn
+        when they share a meaningful number of modules. Edge labels show the
+        shared-module count and thickness scales with it.
+
+        Two defaults keep the graph readable rather than a hairball:
+        - "Chrome" modules (those appearing in >= CHROME_THRESHOLD programmes,
+          e.g. placements, study abroad, learning portfolio) are excluded from
+          the shared counts, because they connect nearly everything without
+          reflecting genuine curricular overlap.
+        - An edge is only drawn when two programmes share >= EDGE_THRESHOLD
+          non-chrome modules.
+
+        Written as note-05-programme-network/note.md at the department unit level,
+        after the by-author topic.
+
+        Args:
+            output_dir: The department unit directory
+            programme_to_topic_path: Optional mapping of programme code -> topic
+                weburl path, used to make nodes clickable.
+        """
+        from collections import defaultdict
+        from itertools import combinations
+
+        CHROME_THRESHOLD = 8   # module in >= this many programmes == institutional "chrome"
+        EDGE_THRESHOLD = 5     # min shared (non-chrome) modules to draw an edge
+
+        # Build module -> set of programme codes that include it
+        mod_progs = defaultdict(set)
+        for pcode, pdata in self.department.programmes.items():
+            for modules in pdata['semesters'].values():
+                for module_info in modules:
+                    mod_progs[module_info['code']].add(pcode)
+
+        # Identify chrome modules to exclude from similarity
+        chrome = {m for m, ps in mod_progs.items() if len(ps) >= CHROME_THRESHOLD}
+
+        # Count shared (non-chrome) modules for every programme pair
+        pair_counts = defaultdict(int)
+        for module_code, progs in mod_progs.items():
+            if module_code in chrome:
+                continue
+            if len(progs) < 2:
+                continue
+            for a, b in combinations(sorted(progs), 2):
+                pair_counts[(a, b)] += 1
+
+        # Keep only edges above the threshold, strongest first
+        edges = [(a, b, c) for (a, b), c in pair_counts.items() if c >= EDGE_THRESHOLD]
+        edges.sort(key=lambda x: -x[2])
+
+        mermaid = self._build_programme_network_diagram(edges, programme_to_topic_path)
+
+        # Programmes that appear in at least one edge (nodes in the graph)
+        connected = set()
+        for a, b, _ in edges:
+            connected.add(a)
+            connected.add(b)
+        isolated = [
+            self.department.programmes[p]['name']
+            for p in self.department.programmes
+            if p not in connected
+        ]
+
+        # Write the note
+        network_note_dir = output_dir / "note-05-programme-network"
+        network_note_dir.mkdir(exist_ok=True)
+
+        icon_type = 'mdi:graph-outline'
+        icon_color = self.catalogue_icons.get('programmes', {}).get('color', '2E7D32')
+
+        with open(network_note_dir / "note.md", 'w') as f:
+            f.write(create_icon_frontmatter(icon_type, icon_color))
+            f.write("# Programme Network\n\n")
+            f.write(
+                "How the department's programmes relate to each other through shared "
+                "modules. An edge links two programmes that share a substantial number "
+                f"of modules (at least {EDGE_THRESHOLD}); the label and line weight show "
+                "how many. Widely-shared institutional modules (placements, study abroad, "
+                "learning portfolio and similar) are excluded so the connections reflect "
+                "genuine curricular overlap.\n\n"
+            )
+            f.write(mermaid)
+
+            if isolated:
+                f.write("\n")
+                f.write(
+                    "**Programmes with no strong shared-module links "
+                    f"(fewer than {EDGE_THRESHOLD} shared modules with any other "
+                    "programme):** "
+                )
+                f.write(", ".join(sorted(isolated)))
+                f.write("\n")
+
+        print(f"    Generated programme network note ({len(connected)} connected "
+               f"programmes, {len(edges)} edges, {len(isolated)} isolated)")
+
+    def _build_programme_network_diagram(self, edges: list,
+                                         programme_to_topic_path: dict = None) -> str:
+        """
+        Build a Mermaid graph of programme-to-programme similarity.
+
+        Args:
+            edges: List of (prog_code_a, prog_code_b, shared_count) tuples,
+                already filtered and sorted by descending shared count.
+            programme_to_topic_path: Optional mapping used to make nodes clickable.
+
+        Returns:
+            A fenced ```mermaid code block as a string.
+        """
+        if not edges:
+            return "*No programmes in this department share enough modules to form a network.*\n"
+
+        def esc(text: str) -> str:
+            return str(text).replace('"', "'")
+
+        # Assign a stable node id to each connected programme
+        node_ids = {}
+        for a, b, _ in edges:
+            for p in (a, b):
+                if p not in node_ids:
+                    node_ids[p] = f"P{len(node_ids) + 1}"
+
+        lines = ["```mermaid", "graph LR"]
+
+        # Node declarations
+        for prog_code, node_id in node_ids.items():
+            prog_name = self.department.programmes[prog_code]['name']
+            lines.append(f'  {node_id}["{esc(prog_name)}"]')
+
+        # Edges, labelled with the shared count
+        for idx, (a, b, count) in enumerate(edges):
+            lines.append(f'  {node_ids[a]} ---|"{count}"| {node_ids[b]}')
+
+        # Thickness buckets: scale line weight with shared-module count
+        for idx, (a, b, count) in enumerate(edges):
+            if count >= 40:
+                width = 4
+            elif count >= 20:
+                width = 3
+            elif count >= 10:
+                width = 2
+            else:
+                width = 1
+            lines.append(f"  linkStyle {idx} stroke-width:{width}px;")
+
+        # Clickable nodes linking to each programme topic
+        if programme_to_topic_path:
+            for prog_code, node_id in node_ids.items():
+                path = programme_to_topic_path.get(prog_code)
+                if path:
+                    lines.append(f'  click {node_id} "{path}"')
+
+        lines.append("```")
+        return "\n".join(lines) + "\n"
+
     def generate_programmes(self, output_dir: Path, module_to_cluster_path: dict) -> dict:
         """
         Generate programmes organized by level (6, 7, 8, 9, 10).

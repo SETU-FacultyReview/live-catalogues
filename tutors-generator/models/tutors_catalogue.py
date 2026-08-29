@@ -186,6 +186,9 @@ class TutorsCatalogue:
         # Generate modules grouped by author
         dept_gen.generate_by_author(unit_dir, module_to_cluster_path)
 
+        # Generate department-level programme similarity network note
+        dept_gen.generate_programme_network(unit_dir, programme_to_topic_path)
+
     def _create_course_files(self):
         """Create required course files (course.md, properties.yaml, course.png)"""
         print("Setting up course files...")
