@@ -84,6 +84,83 @@ class ProgrammeSchedule:
             f.write("Modules by semester\n\n")
             f.write(table_content)
 
+    def generate_structure_diagram(self, output_dir: Path):
+        """
+        Generate a programme structure note with a Mermaid diagram.
+
+        The diagram shows the subject clusters that contribute modules to this
+        programme, with each edge labelled by the number of modules that cluster
+        provides. Written as note-01-structure/note.md inside unit-0, alongside
+        the schedule note.
+
+        Args:
+            output_dir: The programme topic directory (schedule lives in unit-0)
+        """
+        unit_0_dir = output_dir / "unit-0"
+        unit_0_dir.mkdir(exist_ok=True)
+
+        structure_note_dir = unit_0_dir / "note-01-structure"
+        structure_note_dir.mkdir(exist_ok=True)
+
+        # Count unique modules per cluster for this programme
+        cluster_counts = defaultdict(int)
+        seen_modules = set()
+        for modules in self.programme_data['semesters'].values():
+            for module_info in modules:
+                module_code = module_info['code']
+                if module_code in seen_modules:
+                    continue
+                seen_modules.add(module_code)
+                cluster_name = module_info['descriptor'].get('cluster', 'Uncategorized')
+                cluster_counts[cluster_name] += 1
+
+        mermaid = self._build_cluster_diagram(cluster_counts)
+
+        with open(structure_note_dir / "note.md", 'w') as f:
+            if self.icon_type and self.icon_color:
+                from icons import create_icon_frontmatter
+                f.write(create_icon_frontmatter('mdi:sitemap', self.icon_color))
+
+            f.write("# Programme Structure\n\n")
+            f.write("Subject clusters contributing modules to this programme "
+                    "(edge labels show module counts).\n\n")
+            f.write(mermaid)
+
+    def _build_cluster_diagram(self, cluster_counts: dict) -> str:
+        """
+        Build a Mermaid graph linking contributing clusters to the programme.
+
+        Args:
+            cluster_counts: Mapping of cluster name -> module count
+
+        Returns:
+            A fenced ```mermaid code block as a string.
+        """
+        prog_name = self.programme_data['name']
+
+        if not cluster_counts:
+            return "*No cluster data available for this programme.*\n"
+
+        def esc(text: str) -> str:
+            # Keep node labels safe inside double-quoted Mermaid labels
+            return str(text).replace('"', "'")
+
+        lines = ["```mermaid", "graph LR"]
+        # Programme node (styled)
+        lines.append(f'  P["{esc(prog_name)}"]:::prog')
+
+        # Clusters sorted by descending module count, then name
+        for idx, (cluster_name, count) in enumerate(
+            sorted(cluster_counts.items(), key=lambda x: (-x[1], x[0])), 1
+        ):
+            node_id = f"C{idx}"
+            label = f"{esc(cluster_name)}<br/>{count} module{'s' if count != 1 else ''}"
+            lines.append(f'  {node_id}["{label}"] -->|{count}| P')
+
+        lines.append("  classDef prog fill:#1976D2,stroke:#0D47A1,color:#ffffff;")
+        lines.append("```")
+        return "\n".join(lines) + "\n"
+
     def _organize_modules_by_semester(self) -> dict:
         """
         Organize modules by semester.

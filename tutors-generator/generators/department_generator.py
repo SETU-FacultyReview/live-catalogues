@@ -499,6 +499,9 @@ class DepartmentGenerator:
             )
             schedule_generator.generate_schedule(prog_dir)
 
+            # Generate programme structure diagram (Mermaid) alongside schedule
+            schedule_generator.generate_structure_diagram(prog_dir)
+
             # Build weburl path for this programme
             from utils import get_tutors_weburl_path
             # programmes_dir parent is the output_dir (department unit)
